@@ -1,0 +1,178 @@
+sinteractive -A microbiome -n12 -t 8:30:00
+cd $RCAC_SCRATCH
+module load bioinfo
+module load Qiime/2-2020.11
+cd data_downloadT
+
+
+qiime dada2 denoise-paired --i-demultiplexed-seqs demux.qza --p-trim-left-f 0 --p-trunc-len-f 133 --p-trunc-len-r 133 --o-representative-sequences newTobi-rep-seqs.qza --o-table newTobi-table.qza --o-denoising-stats newTobi-stats-dada2.qza
+
+qiime metadata tabulate --m-input-file newTobi-stats-dada2.qza --o-visualization newTobi-stats-dada2.qzv
+
+qiime feature-table summarize --i-table newTobi-table.qza --o-visualization newTobi-table.qzv --m-sample-metadata-file TobiMetadata.txt
+qiime feature-table tabulate-seqs --i-data newTobi-rep-seqs.qza --o-visualization newTobi-rep-seqs.qzv
+
+#tried this at first
+qiime dada2 denoise-paired --i-demultiplexed-seqs demux.qza --p-trim-left-f 13 --p-trim-left-r 13 --p-trunc-len-f 170 --p-trunc-len-r 148 --o-representative-sequences rep-seqs.qza --o-table table.qza --o-denoising-stats stats-dada2.qza
+
+qiime dada2 denoise-paired --i-demultiplexed-seqs demux.qza --p-trim-left-f 13 --p-trim-left-r 13 --p-trunc-len-f 170 --p-trunc-len-r 134 --o-representative-sequences rep-seqs.qza --o-table table.qza --o-denoising-stats stats-dada2.qza
+#i used the len r 134 code
+
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences newTobi-rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+
+qiime diversity alpha-rarefaction \
+>   --i-table newTobi-table.qza \
+>   --i-phylogeny rooted-tree.qza \
+>   --p-max-depth 4000 \
+>   --m-metadata-file  TobiMetadata.txt \
+>   --o-visualization alpha-rarefaction.qzv
+
+
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table newTobi-table.qza \
+  --p-sampling-depth 1113 \
+  --m-metadata-file TobiMetadata.txt \
+  --output-dir core-metrics-results
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file TobiMetadata.txt \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \
+  --m-metadata-file TobiMetadata.txt \
+  --o-visualization core-metrics-results/evenness-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/shannon_vector.qza \
+  --m-metadata-file TobiMetadata.txt  \
+  --o-visualization core-metrics-results/shannon-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/observed_features_vector.qza \
+  --m-metadata-file TobiMetadata.txt  \
+  --o-visualization core-metrics-results/observed_features-group-significance.qzv
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+  --m-metadata-file TobiMetadata.txt  \
+  --m-metadata-column delivery_mode \
+  --o-visualization core-metrics-results/unweighted-unifrac-delivery_mode-significance.qzv \
+  --p-pairwise
+
+#Train classifier code
+$ sinteractive -A microbiome -n12 -t 6:00:00
+$ module load bioinfo
+$ module load Qiime/2-2020.11
+
+cd $RCAC_SCRATCH
+cd data_downloadT
+
+$ wget https://data.qiime2.org/2020.11/common/silva-138-99-seqs.qza
+$ wget https://data.qiime2.org/2020.11/common/silva-138-99-tax.qza
+qiime feature-classifier extract-reads \ 
+--i-sequences silva-138-99-seqs.qza \ 
+--p-f-primer CCTACGGGAGGCAGCAG \ 
+--p-r-primer GGACTACHVGGGTWTCTAAT \ 
+--p-min-length 300 \ 
+--p-max-length 600 \ 
+--p-n-jobs 12 \ 
+--o-reads ref-seqs-v3v4.qza
+
+
+
+qiime feature-classifier fit-classifier-naive-bayes \
+--i-reference-reads ref-seqs-v3v4.qza \
+--i-reference-taxonomy silva-138-99-tax.qza \
+--o-classifier silva-classifier-v3v4.qza
+
+qiime feature-classifier classify-sklearn \
+--i-classifier silva-classifier-v3v4.qza \
+--i-reads rep-seqs.qza \
+--p-n-jobs -1 \
+--o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file newTobi-taxonomy.qza \
+  --o-visualization newTobi-taxonomy.qzv
+####Random Forest
+qiime sample-classifier classify-samples \
+  --i-table newTobi-table.qza \
+  --m-metadata-file TobiMetadata.txt \
+  --m-metadata-column delivery_mode \
+  --p-optimize-feature-selection \
+  --p-parameter-tuning \
+  --p-estimator RandomForestClassifier \
+  --p-n-estimators 20 \
+  --p-random-state 123 \
+  --output-dir Project-classifier
+
+qiime metadata tabulate \
+  --m-input-file Project-classifier/predictions.qza \
+  --o-visualization Project-classifier/predictions.qzv
+
+qiime metadata tabulate \
+  --m-input-file Project-classifier/probabilities.qza \
+  --o-visualization Project-classifier/probabilities.qzv
+
+qiime metadata tabulate \
+  --m-input-file Project-classifier/feature_importance.qza \
+  --o-visualization Project-classifier/feature_importance.qzv
+
+qiime feature-table filter-features \
+  --i-table newTobi-table.qza \
+  --m-metadata-file Project-classifier/feature_importance.qza \
+  --o-filtered-table Project-classifier/important-feature-table.qza
+
+qiime sample-classifier heatmap \
+  --i-table newTobi-table.qza \
+  --i-importance Project-classifier/feature_importance.qza \
+  --m-sample-metadata-file TobiMetadata.txt \
+  --m-sample-metadata-column delivery_mode \
+  --p-group-samples \
+  --p-feature-count 30 \
+  --o-filtered-table Project-classifier/important-feature-table.qza \
+  --o-heatmap Project-classifier/important-feature-heatmap.qzv
+
+qiime sample-classifier heatmap \
+--i-table newTobi-table.qza \
+--i-importance Project-classifier/feature_importance.qza  \
+--m-sample-metadata-file TobiMetadata.txt  \
+--m-sample-metadata-column delivery_mode \
+--m-feature-metadata-file taxonomy.qza \
+--m-feature-metadata-column Taxon \
+--p-group-samples  \
+--p-feature-count 30  \
+--o-filtered-table Project-classifier/important-feature-table-taxonomy.qza \
+--o-heatmap Project-classifier/important-feature-heatmap-taxonomy.qzv
+
+
+#### create frequency table
+qiime taxa collapse \
+--i-table table.qza \
+--i-taxonomy taxonomy.qza \
+--p-level 6 \
+--o-collapsed-table table-level6.qza
+
+qiime feature-table relative-frequency \
+--i-table table-level6.qza \
+--o-relative-frequency-table frequency-table-level6.qza \
+--output-dir collapse.ferquency/
+
+qiime tools export \
+--input-path frequency-table-level6.qza \
+--output-path collapse.ferquency/
+
+biom convert \
+-i collapse.ferquency/feature-table.biom \
+-o frequency-table.txt \
+--header-key "taxonomy" \
+--to-tsv
+
